@@ -1,14 +1,31 @@
 import { registerUser, loginUser } from "../services/authService.js";
+import ApiError from "../ApiError.js";
 
 export const register = async (req, res) => {
     try {
         const { username, email, password } = req.body;
 
-        if (!username || !email || !password ) throw new Error("username or email or password is empty");
+        if (!email|| !password) {
+            return res.status(400).json({
+                success: false,
+                message: "Username, email, or password is missing",
+            })
+        }
         const user = await registerUser(email, username, password);
-        res.status(201).json({ message: 'User registered', user});
+        return res.status(201).json({
+            success: true,
+            message: "User registerd successfully.",
+            data: { user }, 
+        })
     } catch (err) {
-        res.status(400).json({ error: err.message });
+        console.error("Register error: ", err.message);
+
+        const status = err instanceof ApiError ? err.statusCode : 500;
+
+        return res.status(status).json({
+            success: false,
+            message: err.message || "Internal Server Error"
+        })
     }
 
 }
@@ -16,10 +33,22 @@ export const register = async (req, res) => {
 export const login = async (req, res) => {
     try {
         const { email, password } = req.body;
-        if (!email|| !password) throw new Error("email or password is empty");
+        if (!email|| !password) {
+            return res.status(400).json({
+                success: false,
+                message: "Username, email, or password is missing",
+            })
+        }
         const data = await loginUser(email, password);
-        res.status(200).json({ message: "Login successful", ...data })
+        return res.status(200).json({ success: true, message: "Login successful", data })
     } catch (err) {
-        res.status(400).json({ error: err.message});
+        console.error("Login error: ", err.message);
+        
+        const status = err instanceof ApiError ? err.statusCode : 500;
+
+        return res.status(status).json({
+            success: false,
+            message: err.message || "Internal Server Error",
+        })
     }
 }

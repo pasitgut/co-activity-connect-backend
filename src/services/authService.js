@@ -1,13 +1,13 @@
 import bcrypt from "bcrypt";
 import jwt from "jsonwebtoken";
 import pool from "../config/db.js";
+import ApiError from "../ApiError.js";
 
 export const registerUser = async (email, username, password) => {
     const existingUser = await pool.query('SELECT * FROM users WHERE email = $1', [email]);
-    if (existingUser.rows[0]) throw new Error("Username already exists");
+    if (existingUser.rows[0]) throw new ApiError(409, "Email already exists");
 
     const hashedPassword = await bcrypt.hash(password, 10);
-    console.log('hashed password: ', hashedPassword);
     const user = await pool.query("INSERT INTO users (email, username, password) VALUES ($1, $2, $3) RETURNING user_id, email, username", [email, username, hashedPassword]);
     return user.rows[0];
 }
@@ -18,10 +18,10 @@ export const loginUser = async (email, password)  => {
         [email]
     );
     const user = result.rows[0];
-    if (!user) throw new Error("User not found");
+    if (!user) throw new ApiError(404, "User not found");
 
     const valid = await bcrypt.compare(password, user.password);
-    if (!valid) throw new Error("Invalid password");
+    if (!valid) throw new ApiError(401, "Invalid credentials");
 
     const token = jwt.sign(
         { id: user.user_id, username: user.username, email: user.email },
