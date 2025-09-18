@@ -16,9 +16,12 @@ app.use('/api/groups', groupRouter);
 app.use(errorHandler);
 
 (async () => {
-    await createTables();
-    app.listen(3000, () => {
-        console.log(`Server runnning on http://localhost:${3000}`)
-    })
-})
-
+    try {
+        await createTables();
+        app.listen(3000, () => {
+            console.log(`Server running on http://localhost:3000`);
+        });
+    } catch (err) {
+        console.error('Error starting server:', err);
+    }
+})();
