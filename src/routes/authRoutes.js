@@ -1,12 +1,12 @@
 import express from "express";
 import { register, login } from "../controllers/authController.js"
 import { authMiddleware } from '../middlewares/authMiddleware.js';
-const authRouter = express.Router();
-authRouter.post('/register', register);
-authRouter.post('/login', login);
+const authRoutes = express.Router();
+authRoutes.post('/register', register);
+authRoutes.post('/login', login);
 
-authRouter.get('/profile', authMiddleware, (req, res) => {
+authRoutes.get('/profile', authMiddleware, (req, res) => {
     res.json({ message: "Welcome to profile", user: req.user});
 })
 
-export default authRouter;
+export default authRoutes;
