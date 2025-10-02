@@ -53,7 +53,6 @@ export const getGroupMessage = async (req, res) => {
     }
 }
 
-
 export const sendPrivateMessage = async (req, res) => {
     const client = await pool.connect();
 

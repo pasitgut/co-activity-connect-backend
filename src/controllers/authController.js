@@ -36,9 +36,23 @@ export const register = async (req, res) => {
         }
         const hashedPassword = await bcrypt.hash(password, 12);
         const result = await pool.query("INSERT INTO users (username, email, password, year_level, faculty, major) VALUES ($1, $2, $3, $4, $5, $6) RETURNING user_id, username, email, year_level, faculty, major, avatar_url, is_private", [username, email, hashedPassword, year_level, faculty, major]);
-        if (result.rows[0]) {
+        const user = result.rows[0];
+        if (user) {
+             const token = jwt.sign(
+            { id: user.user_id, username: user.username, email: user.email, year: user.year_level, faculty: user.faculty, major: user.major, avatar: user.avatar_url},
+            process.env.JWT_SECRET || "secret",
+        )
             return res.status(201).json({
-                data: result.rows[0],
+                data: {
+                    token: token,
+                    user_id: user.user_id,
+                    username: user.username,
+                    email: user.email,
+                    year: user.year_level,
+                    faculty: user.faculty,
+                    major: user.major,
+                    avatar_url: user.avatar_url
+                },
             })
         } else {
             return res.status(400).json({

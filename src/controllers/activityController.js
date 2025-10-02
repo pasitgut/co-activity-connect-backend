@@ -9,7 +9,7 @@ export const createActivity = async (req, res) => {
 
         const { user_id, title, description, max_member, is_public, type, tags, } = req.body;
 
-        if (!user_id || !title || !description || !max_member || !is_public || !tags || !type) {
+        if (!user_id || !title || !description || !max_member || !is_public) {
             return res.status(400).json({
                 error: {
                     code: "INVALID_INPUT",
@@ -66,7 +66,6 @@ export const createActivity = async (req, res) => {
         client.release();
     }
 }
-
 export const joinActivity = async (req, res) => {
     const client = await pool.connect();
     try {
@@ -76,60 +75,105 @@ export const joinActivity = async (req, res) => {
             return res.status(400).json({
                 error: {
                     code: "INVALID_INPUT",
-                    message: "Validation failed."
+                    message: "Validation failed. Activity ID and User ID are required."
                 }
-            })
+            });
         }
+
         await client.query("BEGIN");
 
-        // check status is pending 
-        const isPending = await client.query("SELECT status FROM activity_member WHERE activity_id = $1 AND user_id = $2", [activity_id, user_id]);
-        if (isPending.rows.length == 0) {
-            throw new Error("Failed to get status.")
-        }
+        // Check if the user already has a status for this activity
+        const isJoinedResult = await client.query(
+            "SELECT status FROM activity_members WHERE activity_id = $1 AND user_id = $2",
+            [activity_id, user_id]
+        );
 
-        if (isPending.rows[0] !== 'pending') {
-            throw new Error("Failed to update status.")
-        }
-        // check is_public for activity 
-        const activityStatus = await client.query("SELECT is_public FROM activities WHERE activity_id = $1", [activity_id]);
-        if (activityStatus === true) {
-            // public 
-            const result = await client.query("INSERT INTO activity_members (activity_id, user_id, status) VALUES ($1, $2, $3) RETURNING *", [activity_id, user_id, 'pending']);
-            if (result.rows.length === 0) {
-                throw new Error("Failed to join activity.");
-            } else {
-                 const uppdateCurrentMember = await client.query("UPDATE activities SET current_member = current_member + 1 WHERE activity_id = $1 RETURNING *", [activity_id]);
-                if (uppdateCurrentMember.rows.length === 0) {
-                    throw new Error("Failed to update current member count.");
-                } else {
-                    await client.query("COMMIT");
-                    return res.status(201).json({
-                    data: {
-                        status: result.rows[0].status
-                    },
-                })
+        let currentStatus = null; // Initialize currentStatus variable
+
+        if (isJoinedResult.rows.length > 0) {
+            currentStatus = isJoinedResult.rows[0].status;
+
+            // If the status is 'pending' or 'accepted', user can't join again
+            if (['pending', 'accepted'].includes(currentStatus)) {
+                return res.status(400).json({
+                    error: {
+                        code: "ALREADY_JOINED",
+                        message: "You have already joined or your request is pending/accepted."
+                    }
+                });
+            }
+
+            // If the status is 'rejected', update it to 'pending' or 'accepted' based on activity visibility
+            if (currentStatus === 'rejected') {
+                // Check if activity is public or private
+                const activityStatusResult = await client.query(
+                    "SELECT is_public FROM activities WHERE activity_id = $1",
+                    [activity_id]
+                );
+
+                if (activityStatusResult.rows.length === 0) {
+                    throw new Error("Activity not found.");
                 }
+
+                const isPublic = activityStatusResult.rows[0].is_public;
+
+                // If the activity is public, update status to 'accepted'
+                const updatedStatus = isPublic ? 'accepted' : 'pending';
+
+                await client.query(
+                    "UPDATE activity_members SET status = $1 WHERE activity_id = $2 AND user_id = $3",
+                    [updatedStatus, activity_id, user_id]
+                );
+
+                // Set currentStatus to the updated status
+                currentStatus = updatedStatus;
             }
         } else {
-            // private 
-            const result = await client.query("INSERT INTO activity_members (activity_id, user_id, status) VALUES ($1, $2, $3) RETURNING *", [activity_id, user_id, 'accepted']);
-            if (result.rows.length === 0) {
-                throw new Error("Failed to join activity.");
-            } else {
-                const uppdateCurrentMember = await client.query("UPDATE activities SET current_member = current_member + 1 WHERE activity_id = $1 RETURNING *", [activity_id]);
-                if (uppdateCurrentMember.rows.length === 0) {
-                    throw new Error("Failed to update current member count.");
-                } else {
-                    await client.query("COMMIT");
-                    return res.status(201).json({
-                    data: {
-                        status: result.rows[0].status
-                    },
-                })
-                }
+            // If the user hasn't joined yet, create a new entry
+            const activityStatusResult = await client.query(
+                "SELECT is_public FROM activities WHERE activity_id = $1",
+                [activity_id]
+            );
+
+            if (activityStatusResult.rows.length === 0) {
+                throw new Error("Activity not found.");
+            }
+
+            const isPublic = activityStatusResult.rows[0].is_public;
+            const newStatus = isPublic ? 'accepted' : 'pending';
+
+            // Insert a new entry for the user joining the activity
+            await client.query(
+                "INSERT INTO activity_members (activity_id, user_id, status) VALUES ($1, $2, $3)",
+                [activity_id, user_id, newStatus]
+            );
+
+            // Set currentStatus to the new status
+            currentStatus = newStatus;
+        }
+
+        // Only increase current_member if status is 'accepted'
+        if (currentStatus === 'accepted') {
+            const updateCurrentMember = await client.query(
+                "UPDATE activities SET current_member = current_member + 1 WHERE activity_id = $1 RETURNING *",
+                [activity_id]
+            );
+
+            if (updateCurrentMember.rows.length === 0) {
+                throw new Error("Failed to update current member count.");
             }
         }
+
+        // Commit the transaction
+        await client.query("COMMIT");
+
+        // Return success response
+        return res.status(201).json({
+            data: {
+                status: currentStatus,  // Return the correct currentStatus
+            },
+        });
+
     } catch (e) {
         await client.query("ROLLBACK");
         console.error("Join activity error: ", e);
@@ -138,31 +182,41 @@ export const joinActivity = async (req, res) => {
                 code: "INTERNAL_SERVER_ERROR",
                 message: e.message || "Internal Server Error",
             }
-        })
+        });
     } finally {
         client.release();
     }
+};
 
-}
 
 export const getActivitiesJoined = async (req, res) => {
     try {
         const { user_id } = req.params;
         console.log("User id: ", user_id);
+
         if (!user_id) {
             return res.status(400).json({
                 error: {
                     code: "INVALID_INPUT",
                     message: "Validation Failed."
                 }
-            })
+            });
         }
 
-        const result = await pool.query('SELECT a.activity_id, a.creator_id, a.title, a.description, a.max_member, a.current_member, a.is_public, a.type, a.tags FROM activities a JOIN activity_members am ON a.activity_id = am.activity_id AND am.user_id = $1', [user_id])
+        // เพิ่มเงื่อนไขตรวจสอบว่า status เป็น 'accepted'
+        const result = await pool.query(
+            `SELECT a.activity_id, a.creator_id, a.title, a.description, 
+                    a.max_member, a.current_member, a.is_public, a.type, a.tags 
+             FROM activities a 
+             JOIN activity_members am ON a.activity_id = am.activity_id 
+             WHERE am.user_id = $1 AND am.status = 'accepted'`, 
+            [user_id]
+        );
 
         return res.status(200).json({
             data: result.rows
-        })
+        });
+
     } catch (e) {
         console.error("Fetch Joined Activities Error: ", e);
         return res.status(500).json({
@@ -170,7 +224,47 @@ export const getActivitiesJoined = async (req, res) => {
                 code: "INTERNAL_SERVER_ERROR",
                 message: e.message || "Internal Server Error"
             }
-        })
+        });
+    }
+}
+
+
+export const getActivitiesPending = async (req, res) => {
+    try {
+        const { user_id } = req.params;
+        console.log("User id: ", user_id);
+
+        if (!user_id) {
+            return res.status(400).json({
+                error: {
+                    code: "INVALID_INPUT",
+                    message: "Validation Failed."
+                }
+            });
+        }
+
+        // เพิ่มเงื่อนไขตรวจสอบว่า status เป็น 'accepted'
+        const result = await pool.query(
+            `SELECT a.activity_id, a.creator_id, a.title, a.description, 
+                    a.max_member, a.current_member, a.is_public, a.type, a.tags 
+             FROM activities a 
+             JOIN activity_members am ON a.activity_id = am.activity_id 
+             WHERE am.user_id = $1 AND am.status = 'pending'`, 
+            [user_id]
+        );
+
+        return res.status(200).json({
+            data: result.rows
+        });
+
+    } catch (e) {
+        console.error("Fetch Joined Activities Error: ", e);
+        return res.status(500).json({
+            error: {
+                code: "INTERNAL_SERVER_ERROR",
+                message: e.message || "Internal Server Error"
+            }
+        });
     }
 }
 
@@ -178,30 +272,41 @@ export const getActivitiesNotJoined = async (req, res) => {
     try {
         const { user_id } = req.params;
         console.log("User id: ", user_id);
-        if (!user_id) {
+
+        if (!user_id || user_id === '') {
             return res.status(400).json({
                 error: {
                     code: "INVALID_INPUT",
-                    message: "Validation Failed."
+                    message: "User ID cannot be empty."
                 }
-            })
+            });
         }
 
-        const result = await pool.query('SELECT a.activity_id, a.creator_id, a.title, a.description, a.max_member, a.current_member, a.is_public, a.type, a.tags FROM activities a JOIN activity_members am ON a.activity_id = am.activity_id AND am.user_id != $1', [user_id])
+        // ดึงกิจกรรมที่ผู้ใช้ยังไม่เข้าร่วม หรือสถานะเป็น 'pending' หรือ 'rejected'
+        const result = await pool.query(
+            `SELECT a.activity_id, a.creator_id, a.title, a.description, 
+                    a.max_member, a.current_member, a.is_public, a.type, a.tags
+             FROM activities a
+             LEFT JOIN activity_members am ON a.activity_id = am.activity_id AND am.user_id = $1
+             WHERE am.user_id IS NULL OR am.status = 'rejected'`,
+            [user_id]
+        );
 
         return res.status(200).json({
             data: result.rows
-        })
+        });
+
     } catch (e) {
-        console.error("Fetch Joined Activities Error: ", e);
+        console.error("Fetch Activities Not Joined Error: ", e);
         return res.status(500).json({
             error: {
                 code: "INTERNAL_SERVER_ERROR",
                 message: e.message || "Internal Server Error"
             }
-        })
+        });
     }
 }
+
 
 export const updateJoinRequest = async (req, res) => {
     try {
@@ -216,17 +321,17 @@ export const updateJoinRequest = async (req, res) => {
             })
         }
 
-        if (!['accpeted', 'rejected'].includes(status)) {
+        if (!['accepted', 'rejected'].includes(status)) {
             return res.status(400).json({
                 error: {
                     code: "INVALID_INPUT",
-                    message: "Status must be either acccpeted or rejected."
+                    message: "Status must be either accepted or rejected."
                 }
             })
         }
 
         const result = await pool.query(
-            'UPDATE activity_members SET status = $1 WHERE user_id = $2 AND activity_id = $3', [status, user_id, activity_id]
+            'UPDATE activity_members SET status = $1 WHERE user_id = $2 AND activity_id = $3 RETURNING *', [status, user_id, activity_id]
         );
 
         if (result.rows.length === 0) {
@@ -238,8 +343,11 @@ export const updateJoinRequest = async (req, res) => {
             })
         }
 
-        if (status === "accpeted") {
-            await pool.query("UPDATE activities SET current_member = current_member + 1 WHERE activity_id = $1", [activity_id]);
+        // เพิ่ม current_member เมื่อสถานะเป็น "accepted"
+        if (status === "accepted") {
+            await pool.query(
+                "UPDATE activities SET current_member = current_member + 1 WHERE activity_id = $1", [activity_id]
+            );
         }
 
         return res.status(200).json({
@@ -249,7 +357,7 @@ export const updateJoinRequest = async (req, res) => {
         console.error("Update join request error: ", e);
         return res.status(500).json({
             error: {
-                code: "INERNAL_SERVER_ERROR",
+                code: "INTERNAL_SERVER_ERROR",
                 message: e.message || "Internal Server Error",
             }
         })
@@ -266,14 +374,21 @@ export const getActivityMembers = async (req, res) => {
                     code: "INVALID_INPUT",
                     message: "activity_id is required.",
                 }
-            })
+            });
         }
 
-    const result = await pool.query("SELECT am.participant_id, am.user_id, am.role, am.status, am.joined_at, u.username, u.email, u.avatar_url FROM activity_members am JOIN users u ON am.user_id = u.user_id WHERE am.activity_id = $1 AND status = 'accepted'", [activity_id]);
+        // Query to fetch members with status 'accepted' or 'pending'
+        const result = await pool.query(
+            "SELECT am.participant_id, am.user_id, am.role, am.status, am.joined_at, u.username, u.email, u.avatar_url " +
+            "FROM activity_members am " +
+            "JOIN users u ON am.user_id = u.user_id " +
+            "WHERE am.activity_id = $1 AND (am.status = 'accepted' OR am.status = 'pending')", 
+            [activity_id]
+        );
 
-    return res.status(200).json({
-        data: result.rows
-    })
+        return res.status(200).json({
+            data: result.rows
+        });
     } catch (e) {
         console.error("Get Activity Members Error: ", e);
         return res.status(500).json({
@@ -281,12 +396,166 @@ export const getActivityMembers = async (req, res) => {
                 code: "INTERNAL_SERVER_ERROR",
                 message: e.message || "Internal Server Error"
             }
-        })
+        });
     }
-}
+};
+
 
 
 /// 
 export const updateActivity = async (req, res) => {
+    const client = await pool.connect(); // ใช้ client จาก pool
+    try {
+        const { activity_id, title, description, max_member, is_public, type, tags } = req.body;
 
-}
+        // ตรวจสอบว่า activity_id และข้อมูลที่จำเป็นมีครบ
+        if (!activity_id || max_member === undefined || is_public === undefined || !title || !type) {
+            return res.status(400).json({
+                error: {
+                    code: "INVALID_INPUT",
+                    message: "activity_id, max_member, title, type, and is_public are required."
+                }
+            });
+        }
+
+        // เริ่มต้น transaction
+        await client.query('BEGIN');
+
+        // ตรวจสอบ activity_id ว่ามีในฐานข้อมูลหรือไม่
+        const activityResult = await client.query(
+            'SELECT * FROM activities WHERE activity_id = $1',
+            [activity_id]
+        );
+
+        if (activityResult.rows.length === 0) {
+            await client.query('ROLLBACK');
+            return res.status(404).json({
+                error: {
+                    code: "NOT_FOUND",
+                    message: "Activity not found."
+                }
+            });
+        }
+
+        // ตรวจสอบว่า max_member ใหม่ไม่น้อยกว่า current_member
+        const currentActivity = activityResult.rows[0];
+        if (max_member < currentActivity.current_member) {
+            await client.query('ROLLBACK');
+            return res.status(400).json({
+                error: {
+                    code: "INVALID_INPUT",
+                    message: "max_member cannot be less than current_member."
+                }
+            });
+        }
+
+        // อัปเดตข้อมูลกิจกรรม
+        const updateQuery = `
+            UPDATE activities
+            SET
+                title = $1,
+                description = $2,
+                max_member = $3,
+                is_public = $4,
+                type = $5,
+                tags = $6,
+                updated_at = CURRENT_TIMESTAMP
+            WHERE activity_id = $7
+            RETURNING *;
+        `;
+        const result = await client.query(updateQuery, [
+            title,
+            description,
+            max_member,
+            is_public,
+            type,
+            tags,
+            activity_id
+        ]);
+
+        // Commit transaction
+        await client.query('COMMIT');
+
+        // ส่งผลลัพธ์กลับ
+        return res.status(200).json({
+            data: result.rows[0]
+        });
+
+    } catch (e) {
+        // หากเกิดข้อผิดพลาด จะทำการ rollback และส่ง error
+        await client.query('ROLLBACK');
+        console.error("Update Activity error: ", e);
+        return res.status(500).json({
+            error: {
+                code: "INTERNAL_SERVER_ERROR",
+                message: e.message || "Internal Server Error"
+            }
+        });
+    } finally {
+        client.release(); // ปล่อย client กลับ pool
+    }
+};
+
+// remove Member from activity
+export const rejectedMember = async (req, res) => {
+    const client = await pool.connect(); // ใช้ client จาก pool
+    try {
+        const { activity_id, user_id } = req.body;
+
+        // ตรวจสอบ input
+        if (!activity_id || !user_id) {
+            return res.status(400).json({
+                error: {
+                    code: "INVALID_INPUT",
+                    message: "activity_id and user_id are required."
+                }
+            });
+        }
+
+        // เริ่มต้น transaction
+        await client.query('BEGIN');
+
+        // อัปเดต status เป็น "rejected" ใน activity_members
+        const result = await client.query(
+            'UPDATE activity_members SET status = $1 WHERE user_id = $2 AND activity_id = $3 RETURNING *',
+            ['rejected', user_id, activity_id]
+        );
+
+        // ถ้าไม่พบข้อมูลใน activity_members
+        if (result.rows.length === 0) {
+            await client.query('ROLLBACK'); // Rollback หากไม่พบสมาชิก
+            return res.status(404).json({
+                error: {
+                    code: "NOT_FOUND",
+                    message: "Participant not found."
+                }
+            });
+        }
+
+        // ลด current_member ลงหนึ่ง ใน activities
+        await client.query(
+            'UPDATE activities SET current_member = current_member - 1 WHERE activity_id = $1',
+            [activity_id]
+        );
+
+        // Commit transaction
+        await client.query('COMMIT');
+
+        // ส่งผลลัพธ์กลับ
+        return res.status(200).json({
+            data: result.rows[0]
+        });
+    } catch (e) {
+        // หากเกิดข้อผิดพลาด จะทำการ rollback และส่ง error
+        await client.query('ROLLBACK');
+        console.error("Update Member error: ", e);
+        return res.status(500).json({
+            error: {
+                code: "INTERNAL_SERVER_ERROR",
+                message: e.message || "Internal Server Error"
+            }
+        });
+    } finally {
+        client.release(); // ปล่อย client กลับ pool
+    }
+};
