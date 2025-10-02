@@ -35,11 +35,11 @@ export const register = async (req, res) => {
             })
         }
         const hashedPassword = await bcrypt.hash(password, 12);
-        const result = await pool.query("INSERT INTO users (username, email, password, year_level, faculty, major) VALUES ($1, $2, $3, $4, $5, $6) RETURNING user_id, username, email, year_level, faculty, major, avatar_url, is_private", [username, email, hashedPassword, year_level, faculty, major]);
+        const result = await pool.query("INSERT INTO users (username, email, password, year_level, faculty, major) VALUES ($1, $2, $3, $4, $5, $6) RETURNING user_id, username, email, year_level, faculty, major, avatar_url, is_private, bio", [username, email, hashedPassword, year_level, faculty, major]);
         const user = result.rows[0];
         if (user) {
              const token = jwt.sign(
-            { id: user.user_id, username: user.username, email: user.email, year: user.year_level, faculty: user.faculty, major: user.major, avatar: user.avatar_url},
+            { id: user.user_id, username: user.username, email: user.email, year: user.year_level, faculty: user.faculty, major: user.major, avatar: user.avatar_url, bio: user.bio},
             process.env.JWT_SECRET || "secret",
         )
             return res.status(201).json({
@@ -51,7 +51,8 @@ export const register = async (req, res) => {
                     year: user.year_level,
                     faculty: user.faculty,
                     major: user.major,
-                    avatar_url: user.avatar_url
+                    avatar_url: user.avatar_url,
+                    bio: user.bio ?? "",
                 },
             })
         } else {
@@ -85,7 +86,7 @@ export const login = async (req, res) => {
                 }
             })
         }
-        const accountExisting = await pool.query("SELECT user_id, username, email, password, year_level, faculty, major, avatar_url FROM users WHERE email = $1", [email]);
+        const accountExisting = await pool.query("SELECT user_id, username, email, password, year_level, faculty, major, avatar_url, bio FROM users WHERE email = $1", [email]);
         if (!accountExisting.rows[0]) {
             return res.status(409).json({
                 error: {
@@ -108,7 +109,7 @@ export const login = async (req, res) => {
         }
         
         const token = jwt.sign(
-            { id: user.user_id, username: user.username, email: user.email, year: user.year_level, faculty: user.faculty, major: user.major, avatar: user.avatar_url},
+            { id: user.user_id, username: user.username, email: user.email, year: user.year_level, faculty: user.faculty, major: user.major, avatar: user.avatar_url, bio: user.bio},
             process.env.JWT_SECRET || "secret",
         )
         return res.status(201).json({
@@ -120,7 +121,8 @@ export const login = async (req, res) => {
                 year: user.year_level,
                 faculty: user.faculty,
                 major: user.major,
-                avatar_url: user.avatar_url
+                avatar_url: user.avatar_url,
+                bio: user.bio ?? "",
             }
         })
     } catch (e) {

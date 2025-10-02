@@ -406,10 +406,10 @@ export const getActivityMembers = async (req, res) => {
 export const updateActivity = async (req, res) => {
     const client = await pool.connect(); // ใช้ client จาก pool
     try {
-        const { activity_id, title, description, max_member, is_public, type, tags } = req.body;
-
+        const  { activity_id, title, description, max_member, is_public, type, tags } = req.body;
+        console.log(`ActivityId: ${activity_id} : Title: ${title} : Description: ${description} : MaxMember: ${max_member} : Is Public: ${is_public} : tag`)
         // ตรวจสอบว่า activity_id และข้อมูลที่จำเป็นมีครบ
-        if (!activity_id || max_member === undefined || is_public === undefined || !title || !type) {
+        if (!activity_id || max_member === undefined || is_public === undefined || !title) {
             return res.status(400).json({
                 error: {
                     code: "INVALID_INPUT",
@@ -457,10 +457,9 @@ export const updateActivity = async (req, res) => {
                 description = $2,
                 max_member = $3,
                 is_public = $4,
-                type = $5,
-                tags = $6,
+                tags = $5,
                 updated_at = CURRENT_TIMESTAMP
-            WHERE activity_id = $7
+            WHERE activity_id = $6
             RETURNING *;
         `;
         const result = await client.query(updateQuery, [
@@ -468,7 +467,6 @@ export const updateActivity = async (req, res) => {
             description,
             max_member,
             is_public,
-            type,
             tags,
             activity_id
         ]);
